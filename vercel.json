@@ -1,11 +1,5 @@
 {
   "buildCommand": "cd web/frontend && npm install && npm run build",
-  "outputDirectory": "web/frontend/dist",
-  "framework": "vite",
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://xx-index-analyse.vercel.app/api/:path*"
-    }
-  ]
+  "outputDirectory": "dist",
+  "framework": "vite"
 }
