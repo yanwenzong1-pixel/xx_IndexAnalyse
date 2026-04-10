@@ -63,7 +63,7 @@ const mockRisk = {
 };
 
 function App() {
-  // 从localStorage恢复状态
+  // 从 localStorage 恢复状态
   const [data, setData] = useState(() => {
     const cachedData = localStorage.getItem('microCapData');
     return cachedData ? JSON.parse(cachedData) : null;
@@ -78,6 +78,8 @@ function App() {
     const cachedTab = localStorage.getItem('activeTab');
     return cachedTab || 'price';
   });
+  // 强制刷新 key，用于触发表格重绘
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const tabs = [
     { id: 'price', label: '价格走势' },
@@ -179,7 +181,7 @@ function App() {
       // 确保数据结构完整
       if (mockData && mockData.latest && mockData.history && Array.isArray(mockData.history)) {
         setData(mockData);
-        // 保存数据到localStorage
+        // 保存数据到 localStorage
         localStorage.setItem('microCapData', JSON.stringify(mockData));
       } else {
         throw new Error('数据结构不完整');
@@ -187,11 +189,14 @@ function App() {
       
       if (mockRisk) {
         setRisk(mockRisk);
-        // 保存风险数据到localStorage
+        // 保存风险数据到 localStorage
         localStorage.setItem('microCapRisk', JSON.stringify(mockRisk));
       } else {
         throw new Error('风险数据不完整');
       }
+      
+      // 增加刷新 key，强制图表重绘
+      setRefreshKey(prev => prev + 1);
     } catch (err) {
       setError(err.message || '刷新数据失败');
       console.error(err);
@@ -210,9 +215,19 @@ function App() {
 
   useEffect(() => {
     loadData();
-    // 每3小时自动刷新数据
+    // 每 3 小时自动刷新数据
     const interval = setInterval(loadData, 3 * 60 * 60 * 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  // 监听页面刷新事件，F5 后强制重绘图表
+  useEffect(() => {
+    // 页面加载完成后延迟触发一次，确保图表正确绘制
+    const timer = setTimeout(() => {
+      setRefreshKey(prev => prev + 1);
+    }, 100);
+    
+    return () => clearTimeout(timer);
   }, []);
 
   if (loading) {
@@ -291,7 +306,7 @@ function App() {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
             {data && data.history && Array.isArray(data.history) && data.history.length > 0 ? (
               activeTab === 'price' ? (
-                <PriceChart data={data.history} />
+                <PriceChart key={refreshKey} data={data.history} forceRefreshKey={refreshKey} />
               ) : (
                 <TurnoverChart data={data.history} />
               )

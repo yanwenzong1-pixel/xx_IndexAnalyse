@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>风险趋势数据测试</title>
+  <script src="./data/static-data.js" charset="utf-8"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    .success {
+      background: #d4edda;
+      color: #155724;
+    }
+    .error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    .info {
+      background: #d1ecf1;
+      color: #0c5460;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    pre {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>风险趋势数据测试</h1>
+    <p class="info" style="padding:10px;border-radius:4px;">
+      <strong>静态模式</strong>：从 <code>data/risk_history_sample.json</code> 加载。请运行 <code>python tools/export_static_predict_history.py</code> 生成；通过 HTTP 静态站点访问。
+    </p>
+    
+    <button onclick="loadData()">加载风险数据（静态 JSON）</button>
+    
+    <div id="status"></div>
+    
+    <h3>数据预览：</h3>
+    <pre id="preview">点击按钮加载数据...</pre>
+  </div>
+
+  <script>
+    function staticDataBase() {
+      try {
+        const u = new URLSearchParams(window.location.search);
+        const d = u.get('data');
+        if (d && String(d).trim()) return String(d).replace(/\/$/, '');
+      } catch (e) {}
+      return './data';
+    }
+
+    async function loadData() {
+      const statusDiv = document.getElementById('status');
+      const previewDiv = document.getElementById('preview');
+      
+      statusDiv.innerHTML = '<div class="info">正在加载数据...</div>';
+      previewDiv.textContent = '加载中...';
+      
+      try {
+        let result = window.__STATIC_RISK_HISTORY__;
+        if (!result || typeof result !== 'object') {
+          const response = await fetch(`${staticDataBase()}/risk_history_sample.json`);
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          result = await response.json();
+        }
+        
+        if (result.success) {
+          statusDiv.innerHTML = `
+            <div class="success">
+              <strong>✅ 数据加载成功！</strong><br>
+              数据条数：${result.data.length}<br>
+              平均风险：${result.metadata.avg_risk.toFixed(2)}<br>
+              最新风险：${result.metadata.current_risk.toFixed(2)}
+            </div>
+          `;
+          
+          // 显示前 3 条数据预览
+          const preview = result.data.slice(0, 3).map(item => ({
+            date: item.date,
+            risk_score: item.risk_score,
+            risk_level: item.risk_level
+          }));
+          
+          previewDiv.textContent = JSON.stringify(preview, null, 2);
+          
+          // 保存到 localStorage
+          localStorage.setItem('riskHistoryData', JSON.stringify(result.data));
+          localStorage.setItem('riskHistoryTimestamp', Date.now().toString());
+          
+          console.log('数据已保存到 localStorage');
+        } else {
+          statusDiv.innerHTML = `
+            <div class="error">
+              <strong>❌ API 返回错误</strong><br>
+              ${result.message || '未知错误'}
+            </div>
+          `;
+        }
+      } catch (error) {
+        statusDiv.innerHTML = `
+          <div class="error">
+            <strong>❌ 请求失败</strong><br>
+            ${error.message}
+          </div>
+        `;
+        console.error('Error:', error);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>风险趋势数据格式验证</title>
+  <script src="./data/static-data.js" charset="utf-8"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 { color: #333; }
+    .status {
+      padding: 15px;
+      margin: 10px 0;
+      border-radius: 4px;
+      border-left: 4px solid;
+    }
+    .success {
+      background: #d4edda;
+      color: #155724;
+      border-color: #28a745;
+    }
+    .error {
+      background: #f8d7da;
+      color: #721c24;
+      border-color: #dc3545;
+    }
+    .info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border-color: #17a2b8;
+    }
+    .warning {
+      background: #fff3cd;
+      color: #856404;
+      border-color: #ffc107;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+    }
+    button:hover { background: #0056b3; }
+    pre {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      max-height: 400px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    .test-section {
+      margin: 20px 0;
+      padding: 15px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>风险趋势数据格式验证</h1>
+    <div class="test-section warning">
+      <strong>静态模式</strong>：从 <code>data/risk_history_sample.json</code> 加载（与旧版 <code>/api/risk/history</code> 响应结构一致）。请运行仓库根目录 <code>python tools/export_static_predict_history.py</code> 生成数据，并通过 HTTP 静态站点打开本页（避免 file://）。
+    </div>
+    
+    <div class="test-section">
+      <h3>测试操作</h3>
+      <button onclick="testAPI()">测试静态 JSON 数据格式</button>
+      <button onclick="checkLocalStorage()">检查 localStorage</button>
+      <button onclick="clearCache()">清除缓存</button>
+    </div>
+    
+    <div id="status"></div>
+    
+    <div class="test-section">
+      <h3>静态 JSON 响应数据</h3>
+      <pre id="apiResponse">点击「测试静态 JSON 数据格式」查看内容</pre>
+    </div>
+    
+    <div class="test-section">
+      <h3>数据格式验证结果</h3>
+      <pre id="validationResult">等待验证...</pre>
+    </div>
+    
+    <div class="test-section">
+      <h3>localStorage 数据</h3>
+      <pre id="localStorageData">点击"检查 localStorage"按钮查看缓存数据</pre>
+    </div>
+  </div>
+
+  <script>
+    function staticDataBase() {
+      try {
+        const u = new URLSearchParams(window.location.search);
+        const d = u.get('data');
+        if (d && String(d).trim()) return String(d).replace(/\/$/, '');
+      } catch (e) {}
+      return './data';
+    }
+
+    // 测试静态 JSON 数据格式
+    async function testAPI() {
+      const statusDiv = document.getElementById('status');
+      const apiResponseDiv = document.getElementById('apiResponse');
+      const validationResultDiv = document.getElementById('validationResult');
+      
+      statusDiv.innerHTML = '<div class="info">正在加载数据...</div>';
+      apiResponseDiv.textContent = '加载中...';
+      validationResultDiv.textContent = '验证中...';
+      
+      try {
+        let result = window.__STATIC_RISK_HISTORY__;
+        if (!result || typeof result !== 'object') {
+          const response = await fetch(`${staticDataBase()}/risk_history_sample.json`);
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          result = await response.json();
+        }
+        
+        // 显示 API 响应
+        apiResponseDiv.textContent = JSON.stringify(result, null, 2);
+        
+        // 验证数据格式
+        const validation = validateDataFormat(result);
+        
+        if (validation.success) {
+          statusDiv.innerHTML = '<div class="success"><strong>✅ 静态 JSON 数据格式正确！</strong></div>';
+        } else {
+          statusDiv.innerHTML = '<div class="error"><strong>❌ 静态 JSON 数据格式错误！</strong><br>' + validation.errors.join('<br>') + '</div>';
+        }
+        
+        // 显示验证结果
+        validationResultDiv.textContent = validation.summary;
+        
+        // 保存到 localStorage
+        if (result.success && result.data) {
+          localStorage.setItem('riskHistoryData', JSON.stringify(result.data));
+          localStorage.setItem('riskHistoryTimestamp', Date.now().toString());
+          console.log('数据已保存到 localStorage');
+        }
+        
+      } catch (error) {
+        statusDiv.innerHTML = '<div class="error"><strong>❌ 请求失败</strong><br>' + error.message + '</div>';
+        apiResponseDiv.textContent = '请求失败：' + error.message;
+        validationResultDiv.textContent = '无法验证：请求失败';
+        console.error('Error:', error);
+      }
+    }
+    
+    // 验证数据格式
+    function validateDataFormat(result) {
+      const errors = [];
+      const warnings = [];
+      const info = [];
+      
+      // 检查 success 字段
+      if (!result.success) {
+        errors.push('API 返回失败：' + (result.message || '未知错误'));
+        return {
+          success: false,
+          errors: errors,
+          summary: 'API 返回失败，无法继续验证'
+        };
+      }
+      
+      // 检查 data 字段
+      if (!result.data) {
+        errors.push('缺少 data 字段');
+        return {
+          success: false,
+          errors: errors,
+          summary: '缺少 data 字段'
+        };
+      }
+      
+      if (!Array.isArray(result.data)) {
+        errors.push('data 不是数组类型');
+        return {
+          success: false,
+          errors: errors,
+          summary: 'data 不是数组类型'
+        };
+      }
+      
+      if (result.data.length === 0) {
+        warnings.push('data 数组为空');
+      } else {
+        info.push(`data 数组包含 ${result.data.length} 条记录`);
+      }
+      
+      // 验证每条记录的格式
+      const requiredFields = ['date', 'risk_score'];
+      let validCount = 0;
+      let invalidCount = 0;
+      
+      result.data.forEach((item, index) => {
+        const itemErrors = [];
+        
+        // 检查必需字段
+        requiredFields.forEach(field => {
+          if (item[field] === undefined) {
+            itemErrors.push(`第${index}条记录缺少字段：${field}`);
+          }
+        });
+        
+        if (itemErrors.length > 0) {
+          invalidCount++;
+          errors.push(...itemErrors);
+        } else {
+          validCount++;
+          
+          // 验证 risk_score 是数字
+          if (typeof item.risk_score !== 'number') {
+            warnings.push(`第${index}条记录的 risk_score 不是数字：${typeof item.risk_score}`);
+          }
+          
+          // 验证 risk_score 范围
+          if (item.risk_score < 0 || item.risk_score > 10) {
+            warnings.push(`第${index}条记录的 risk_score 超出范围 [0, 10]：${item.risk_score}`);
+          }
+          
+          // 验证 date 格式
+          if (typeof item.date !== 'string') {
+            warnings.push(`第${index}条记录的 date 不是字符串：${typeof item.date}`);
+          } else if (!/^\d{4}-\d{2}-\d{2}$/.test(item.date)) {
+            warnings.push(`第${index}条记录的 date 格式不正确：${item.date}`);
+          }
+        }
+      });
+      
+      // 检查 metadata
+      if (result.metadata) {
+        info.push('包含 metadata 字段');
+        const metadataFields = ['total_days', 'avg_risk', 'current_risk'];
+        metadataFields.forEach(field => {
+          if (result.metadata[field] !== undefined) {
+            info.push(`metadata.${field}: ${result.metadata[field]}`);
+          }
+        });
+      } else {
+        warnings.push('缺少 metadata 字段');
+      }
+      
+      // 生成总结
+      let summary = `数据验证完成\n\n`;
+      summary += `有效记录：${validCount} 条\n`;
+      summary += `无效记录：${invalidCount} 条\n`;
+      
+      if (errors.length > 0) {
+        summary += `\n错误 (${errors.length}):\n`;
+        summary += errors.join('\n');
+      }
+      
+      if (warnings.length > 0) {
+        summary += `\n\n警告 (${warnings.length}):\n`;
+        summary += warnings.join('\n');
+      }
+      
+      if (info.length > 0) {
+        summary += `\n\n信息 (${info.length}):\n`;
+        summary += info.join('\n');
+      }
+      
+      return {
+        success: errors.length === 0,
+        errors: errors,
+        warnings: warnings,
+        info: info,
+        summary: summary
+      };
+    }
+    
+    // 检查 localStorage
+    function checkLocalStorage() {
+      const localStorageDiv = document.getElementById('localStorageData');
+      const statusDiv = document.getElementById('status');
+      
+      const cachedData = localStorage.getItem('riskHistoryData');
+      const cachedTimestamp = localStorage.getItem('riskHistoryTimestamp');
+      
+      if (!cachedData) {
+        localStorageDiv.textContent = '无缓存数据';
+        statusDiv.innerHTML = '<div class="warning">⚠️ localStorage 中没有缓存数据</div>';
+        return;
+      }
+      
+      try {
+        const data = JSON.parse(cachedData);
+        const timestamp = parseInt(cachedTimestamp);
+        const now = Date.now();
+        const hoursPassed = (now - timestamp) / (1000 * 60 * 60);
+        
+        localStorageDiv.textContent = `缓存时间：${new Date(timestamp).toLocaleString()}\n缓存时长：${hoursPassed.toFixed(2)} 小时前\n数据条数：${data.length}\n\n数据预览（前 3 条）:\n` + JSON.stringify(data.slice(0, 3), null, 2);
+        
+        statusDiv.innerHTML = '<div class="success">✅ localStorage 缓存数据正常</div>';
+      } catch (e) {
+        localStorageDiv.textContent = '缓存数据解析失败：' + e.message;
+        statusDiv.innerHTML = '<div class="error">❌ localStorage 缓存数据损坏</div>';
+      }
+    }
+    
+    // 清除缓存
+    function clearCache() {
+      const statusDiv = document.getElementById('status');
+      const localStorageDiv = document.getElementById('localStorageData');
+      
+      localStorage.removeItem('riskHistoryData');
+      localStorage.removeItem('riskHistoryTimestamp');
+      
+      statusDiv.innerHTML = '<div class="success">✅ 缓存已清除</div>';
+      localStorageDiv.textContent = '缓存已清除，点击"检查 localStorage"按钮确认';
+    }
+  </script>
+</body>
+</html>

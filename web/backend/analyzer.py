@@ -3,6 +3,9 @@ import json
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from utils.factor_data_service import get_factor_service
+from utils.risk_calculation_service import get_risk_calculator
+from utils.decline_calculation_service import calculate_expected_decline_detailed
 
 class MicroCapAnalyzer:
     def __init__(self):
@@ -14,6 +17,8 @@ class MicroCapAnalyzer:
         
     def fetch_data(self):
         """获取微盘股指数数据"""
+        import time
+        
         params = {
             "cb": "jQuery35108745723541970376_1772087141861",
             "secid": self.secid,
@@ -27,17 +32,91 @@ class MicroCapAnalyzer:
             "_": "1772703835"
         }
         
-        try:
-            response = requests.get(self.base_url, params=params, timeout=30)
-            if response.status_code == 200:
-                # 处理JSONP响应
-                content = response.text
-                json_str = content.split('(', 1)[1].rstrip(')')
-                self.data = json.loads(json_str)
-                self._parse_data()
-                return True
-        except Exception as e:
-            print(f"数据获取失败: {e}")
+        # 配置请求头，模拟浏览器
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://quote.eastmoney.com/',
+            'Connection': 'keep-alive'
+        }
+        
+        # 重试机制：最多尝试 5 次，递增等待时间
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                print(f"正在获取数据... (尝试 {attempt + 1}/{max_retries})")
+                
+                # 尝试直接连接
+                response = requests.get(
+                    self.base_url, 
+                    params=params, 
+                    headers=headers,
+                    timeout=30,
+                    proxies=None  # 不使用代理
+                )
+                
+                if response.status_code == 200:
+                    # 处理 JSONP 响应
+                    content = response.text
+                    
+                    # 更健壮的 JSONP 解析
+                    start_idx = content.find('(')
+                    end_idx = content.rfind(')')
+                    
+                    if start_idx == -1 or end_idx == -1:
+                        raise ValueError("无效的 JSONP 格式")
+                    
+                    json_str = content[start_idx + 1:end_idx]
+                    json_str = json_str.strip()
+                    
+                    self.data = json.loads(json_str)
+                    self._parse_data()
+                    # 避免控制台在 GBK 编码下打印 Unicode 表情导致训练脚本中断
+                    print(f"数据获取成功，共 {len(self.df)} 条记录")
+                    return True
+                else:
+                    print(f"HTTP 错误：{response.status_code}")
+                    
+            except requests.exceptions.ProxyError as e:
+                print(f"代理错误：{e}")
+                print("尝试不使用代理直接连接...")
+                continue
+            except requests.exceptions.SSLError as e:
+                print(f"SSL 错误：{e}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+            except json.JSONDecodeError as e:
+                print(f"JSON 解析失败：{e}")
+                print(f"响应内容长度：{len(response.text)}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+            except requests.exceptions.Timeout as e:
+                print(f"请求超时：{e}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 3
+                    print(f"等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+            except requests.exceptions.ConnectionError as e:
+                print(f"连接错误：{e}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 3
+                    print(f"等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+            except Exception as e:
+                print(f"数据获取失败：{e}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+        
+        # 避免控制台在 GBK 编码下打印 Unicode 表情导致训练脚本中断
+        print("数据获取失败：超过最大重试次数")
+        print("提示：将使用静态历史数据或缓存数据")
         return False
     
     def _parse_data(self):
@@ -144,57 +223,171 @@ class MicroCapAnalyzer:
         }
     
     def assess_risk_level(self):
-        """评估风险等级（1-10级）"""
+        """评估风险等级（1-10 级，支持连续小数）"""
         if self.df is None:
             return 0
         
-        # 基础风险分数
-        risk_score = 5
+        # 确保必要的指标已计算
+        if 'ma20' not in self.df.columns:
+            self.df['ma20'] = self.df['close'].rolling(20).mean()
+        if 'ma5' not in self.df.columns:
+            self.df['ma5'] = self.df['close'].rolling(5).mean()
+        if 'volatility' not in self.df.columns:
+            self.df['volatility'] = self.df['change_pct'].rolling(20).std() * np.sqrt(252)
+        if 'ma20_20d' not in self.df.columns:
+            self.df['ma20_20d'] = self.df['amount'].rolling(20).mean()
         
-        # 流动性风险
+        # 基础风险分数（降低至 3.0，让风险分数更敏感）
+        risk_score = 3.0
+        
+        # ========== 1. 流动性风险（权重 20%）==========
         liquidity_indicators = self.calculate_liquidity_indicators()
         if liquidity_indicators:
-            # 换手率过高
-            if liquidity_indicators['latest_avg_turnover_5d'] > 8:
-                risk_score += 2
-            # 流动性枯竭
-            elif liquidity_indicators['latest_amount_to_market_cap'] < 0.001:
-                risk_score += 3
+            turnover = liquidity_indicators['latest_avg_turnover_5d']
+            # 换手率风险（降低阈值）
+            if turnover > 12:
+                risk_score += 2.0
+            elif turnover > 8:
+                risk_score += 1.0 + (turnover - 8) / 4.0
+            elif turnover > 5:
+                risk_score += (turnover - 5) / 3.0
+            
+            # 流动性枯竭风险
+            amount_ratio = liquidity_indicators['latest_amount_to_market_cap']
+            if amount_ratio < 0.0005:
+                risk_score += 3.0
+            elif amount_ratio < 0.001:
+                risk_score += 2.0 + (0.001 - amount_ratio) / 0.0005
+            elif amount_ratio < 0.002:
+                risk_score += 1.0 + (0.002 - amount_ratio) / 0.001
         
-        # 价格趋势风险
+        # ========== 2. 单日暴跌风险（新增，权重 20%）==========
+        daily_change = self.df['change_pct'].iloc[-1]
+        
+        if daily_change < -7:
+            risk_score += 2.0
+        elif daily_change < -5:
+            risk_score += 1.5
+        elif daily_change < -3:
+            risk_score += 1.0
+        elif daily_change < -2:
+            risk_score += 0.5
+        
+        # ========== 3. 价格趋势风险（双向计算，权重 25%）==========
         if len(self.df) > 20:
-            # 短期大幅上涨
             recent_change = self.df['change_pct'].tail(5).sum()
-            if recent_change > 20:
-                risk_score += 2
-            # 跌破重要均线
-            if self.df['close'].iloc[-1] < self.df['ma20'].iloc[-1]:
-                risk_score += 1
+            
+            # 上涨风险
+            if recent_change > 15:
+                risk_score += min(2.0, 1.0 + (recent_change - 15) / 10.0)
+            elif recent_change > 8:
+                risk_score += (recent_change - 8) / 7.0
+            
+            # 下跌风险（新增）
+            if recent_change < -15:
+                risk_score += min(2.0, abs(recent_change) / 10.0)
+            elif recent_change < -8:
+                risk_score += abs(recent_change) / 10.0
+            elif recent_change < -5:
+                risk_score += abs(recent_change) / 15.0
+            
+            # 均线跌破风险（降低阈值）
+            close_price = self.df['close'].iloc[-1]
+            ma20_price = self.df['ma20'].iloc[-1]
+            if close_price < ma20_price:
+                drop_ratio = (ma20_price - close_price) / ma20_price
+                if drop_ratio > 0.05:
+                    risk_score += 2.0
+                elif drop_ratio > 0.02:
+                    risk_score += 1.0 + (drop_ratio - 0.02) / 0.03
+                else:
+                    risk_score += drop_ratio / 0.02
         
-        # 波动率风险
+        # ========== 4. 连续下跌风险（新增，权重 10%）==========
+        consecutive_down = 0
+        for i in range(min(5, len(self.df))):
+            if self.df['change_pct'].iloc[-(i+1)] < 0:
+                consecutive_down += 1
+            else:
+                break
+        
+        if consecutive_down >= 5:
+            risk_score += 2.0
+        elif consecutive_down >= 3:
+            risk_score += 1.0
+        elif consecutive_down >= 2:
+            risk_score += 0.5
+        
+        # ========== 5. 波动率风险（权重 15%，降低阈值）==========
         volatility = self.df['change_pct'].rolling(20).std().iloc[-1]
-        if volatility > 5:
-            risk_score += 2
+        if volatility > 8:
+            risk_score += 2.0
+        elif volatility > 5:
+            risk_score += 1.0 + (volatility - 5) / 3.0
+        elif volatility > 3:
+            risk_score += (volatility - 3) / 2.0
         
-        # 限制风险等级在1-10之间
-        self.risk_level = max(1, min(10, risk_score))
+        # ========== 6. 成交量异常风险（新增，权重 10%）==========
+        avg_amount_20d = self.df['ma20_20d'].iloc[-1]
+        current_amount = self.df['amount'].iloc[-1]
+        
+        if avg_amount_20d > 0:
+            amount_ratio_20d = current_amount / avg_amount_20d
+            
+            # 成交量异常放大（>150%）
+            if amount_ratio_20d > 1.5:
+                risk_score += 1.0
+            # 成交量异常萎缩（<50%）
+            elif amount_ratio_20d < 0.5:
+                risk_score += 1.5
+        
+        # 限制风险等级在 1-10 之间，保留 2 位小数
+        self.risk_level = round(max(1.0, min(10.0, risk_score)), 2)
         return self.risk_level
     
     def predict_downside_risk(self):
-        """预测下跌风险"""
+        """预测下跌风险 - 使用新的多因子模型"""
         if self.df is None:
             return 0
         
-        # 基于历史数据的简单预测
-        recent_volatility = self.df['change_pct'].rolling(20).std().iloc[-1]
-        recent_trend = self.df['change_pct'].tail(5).mean()
+        # 获取因子服务和风险计算器
+        factor_service = get_factor_service()
+        risk_calculator = get_risk_calculator()
+        
+        # 获取所有25个因子数据
+        factors = factor_service.get_all_factors(self.df)
         
         # 计算下跌概率
-        downside_probability = 0
-        if recent_trend < 0 and recent_volatility > 3:
-            downside_probability = min(1, (abs(recent_trend) / 2 + recent_volatility / 10))
+        results = risk_calculator.predict_downside_probability(factors, self.df)
         
-        return downside_probability
+        # 返回T+1下跌概率
+        return results['prob_t1']
+
+    def predict_downside_probability_detailed(self):
+        """详细预测下跌概率 - 返回T+1和T+5概率及中间结果"""
+        if self.df is None:
+            return {
+                'prob_t1': 0,
+                'prob_t5': 0,
+                'base_risk': 0,
+                'adjusted_risk': 0,
+                'trend_adjustment': 1.0,
+                'volatility_20d': 0,
+                'momentum_1d': 0,
+                'momentum_5d': 0
+            }
+        
+        # 获取因子服务和风险计算器
+        factor_service = get_factor_service()
+        risk_calculator = get_risk_calculator()
+        
+        # 获取所有25个因子数据
+        factors = factor_service.get_all_factors(self.df)
+        
+        # 计算下跌概率
+        results = risk_calculator.predict_downside_probability(factors, self.df)
+        
+        return results
     
     def generate_daily_report(self):
         """生成每日报告"""
@@ -203,7 +396,14 @@ class MicroCapAnalyzer:
         
         latest_data = self.df.iloc[-1]
         risk_level = self.assess_risk_level()
-        downside_probability = self.predict_downside_risk()
+        
+        # 获取详细预测结果
+        prediction_results = self.predict_downside_probability_detailed()
+        prob_t1 = prediction_results['prob_t1']
+        prob_t5 = prediction_results['prob_t5']
+        
+        # 计算预期跌幅
+        decline_results = calculate_expected_decline_detailed(prediction_results)
         
         report = f"""
 微盘股指数每日监控报告
@@ -217,9 +417,9 @@ class MicroCapAnalyzer:
 - 振幅：{latest_data['amplitude']:.2f}%
 
 二、核心指标
-- 5日平均换手率：{self.df['turnover'].tail(5).mean():.2f}%
+- 5 日平均换手率：{self.df['turnover'].tail(5).mean():.2f}%
 - 成交额/总市值：{latest_data['amount']/5e9*100:.2f}%
-- 20日波动率：{self.df['change_pct'].rolling(20).std().iloc[-1]*100:.2f}%
+- 20 日波动率：{self.df['change_pct'].rolling(20).std().iloc[-1]*100:.2f}%
 
 三、资金结构
 - 成交额变化：{self.df['amount'].pct_change().iloc[-1]*100:.2f}%
@@ -227,8 +427,11 @@ class MicroCapAnalyzer:
 
 四、风险评级
 - 风险等级：{risk_level}/10
-- 下跌概率：{downside_probability*100:.2f}%
-- 预警状态：{'风险警报' if downside_probability > 0.7 else '正常'}
+- 次日下跌概率：{prob_t1*100:.2f}%
+- 5 日内下跌概率：{prob_t5*100:.2f}%
+- 次日预期跌幅：{decline_results['t1']['expected_decline']:.2f}% (区间：{decline_results['t1']['lower_bound']:.2f}% ~ {decline_results['t1']['upper_bound']:.2f}%)
+- 5 日内预期跌幅：{decline_results['t5']['expected_decline']:.2f}% (区间：{decline_results['t5']['lower_bound']:.2f}% ~ {decline_results['t5']['upper_bound']:.2f}%)
+- 预警状态：{'风险警报' if prob_t1 > 0.7 else '正常'}
 
 五、后续展望
 - 短期趋势：{'上涨' if self.df['close'].iloc[-1] > self.df['ma5'].iloc[-1] else '下跌'}

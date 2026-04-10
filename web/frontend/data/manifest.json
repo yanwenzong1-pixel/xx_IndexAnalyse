@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-04-03T02:44:35.320826+00:00",
+  "source": "tools/export_static_predict_history.py",
+  "days": 100,
+  "risk_sample_days": 100,
+  "include_evaluation": true,
+  "predict_success": true,
+  "risk_success": true
+}

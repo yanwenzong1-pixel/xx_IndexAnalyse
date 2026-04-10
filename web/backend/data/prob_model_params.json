@@ -1,0 +1,22 @@
+{
+  "version": 3,
+  "temperature_t1": 4.11,
+  "temperature_t5": 4.10,
+  "t1_weights": {
+    "alpha_0": -1.5,
+    "alpha_1": 2.0,
+    "alpha_2": 0.5,
+    "alpha_3": 0.03,
+    "alpha_4": -0.02
+  },
+  "t5_weights": {
+    "beta_0": -1.2,
+    "beta_1": 1.8,
+    "beta_2": 0.4,
+    "beta_3": 0.04,
+    "beta_4": -0.03,
+    "beta_5": 0.05,
+    "beta_6": -0.02
+  }
+}
+
